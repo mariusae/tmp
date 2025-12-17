@@ -17,6 +17,29 @@ from pathlib import Path
 
 REPO_URL = "git@github.com:mariusae/tmp.git"
 
+MAX_FILES = 200
+MAX_SIZE_BYTES = 20 * 1024 * 1024  # 20MB
+
+
+def check_directory_size(path: Path) -> tuple[int, int]:
+    """Return (file_count, total_bytes) for a directory."""
+    file_count = 0
+    total_bytes = 0
+    for entry in path.rglob("*"):
+        if entry.is_file():
+            file_count += 1
+            total_bytes += entry.stat().st_size
+    return file_count, total_bytes
+
+
+def format_size(size_bytes: int) -> str:
+    """Format bytes as human-readable string."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f}{unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f}TB"
+
 
 def run(cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
     """Run a command and return the result."""
@@ -42,6 +65,9 @@ Examples:
 
   # Push a specific directory with a custom name
   %(prog)s /path/to/dir -n project -m 'preliminary version'
+
+  # Force push a large directory (bypasses size checks)
+  %(prog)s /path/to/large/dir -f
 """,
     )
     parser.add_argument(
@@ -62,6 +88,12 @@ Examples:
         dest="commit_message",
         help="Commit message (default: timestamp)",
     )
+    parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Bypass size checks (>200 files or >20MB)",
+    )
     args = parser.parse_args()
 
     # Resolve source directory
@@ -69,6 +101,19 @@ Examples:
     if not source_dir.is_dir():
         print(f"Error: '{source_dir}' is not a directory", file=sys.stderr)
         sys.exit(1)
+
+    # Check directory size unless --force is specified
+    if not args.force:
+        file_count, total_bytes = check_directory_size(source_dir)
+        warnings = []
+        if file_count > MAX_FILES:
+            warnings.append(f"{file_count} files (limit: {MAX_FILES})")
+        if total_bytes > MAX_SIZE_BYTES:
+            warnings.append(f"{format_size(total_bytes)} (limit: {format_size(MAX_SIZE_BYTES)})")
+        if warnings:
+            print(f"Error: Directory too large: {', '.join(warnings)}", file=sys.stderr)
+            print("Use -f/--force to bypass this check.", file=sys.stderr)
+            sys.exit(1)
 
     # Determine target name
     target_name = args.target_name or source_dir.name
